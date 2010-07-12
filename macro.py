@@ -16,12 +16,10 @@ class Macro(object):
 
     def substitute_all(self):
         for regex, replace_string in self.mapper.iteritems():
-            self.content = re.sub(regex, replace_string, self.content)
-        return self.content
+            self.substitute(regex, replace_string)
 
-    def substitute(self, regex):
+    def substitute(self, regex, replace_string):
         self.content = re.sub(regex, replace_string, self.content)
-        return self.content
 
     def get_content(self):
         return self.content
@@ -49,6 +47,6 @@ if __name__ == '__main__':
     print 'Content:\n', content
     macro = Macro(mapper, content)
 
-    result = macro.substitute_all()
+    macro.substitute_all()
 
-    print 'Result:\n', result
+    print 'Result:\n', macro.get_content()
