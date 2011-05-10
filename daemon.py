@@ -19,11 +19,6 @@
 # @author: Sreejith K
 # Created on 10th May 2010
 
-__author__ = "Chad J. Schroeder"
-__copyright__ = "Copyright (C) 2005 Chad J. Schroeder"
-
-__revision__ = "$Id$"
-__version__ = "0.2"
 
 # Standard Python modules.
 import os               # Miscellaneous OS interfaces.
@@ -49,19 +44,26 @@ else:
 
 
 class Daemon(object):
-	"""Subclass this class for a native Python Daemon"""
+	"""Subclass this class for a native UNIX Daemon"""
 
-	def __init__(self, logfile=None, loglevel=None, work_dir=None, umask=None):
+	def __init__(self, logfile=None, loglevel=None, work_dir=WORKDIR, umask=UMASK):
+		self.logfile = logfile
+		self.loglevel = loglevel
+		self.work_dir = work_dir
+		self.umask = umask
 		if not logfile:
-			self.logfile = os.path.join(os.path.dirname(__file__), '%s.log' %self.__class__.__name__)
+			self.logfile = os.path.join(os.path.abspath(os.path.dirname(__file__)), 
+										'%s.log' %self.__class__.__name__)
 		if not loglevel:
 			self.loglevel = logging.INFO
 
+
+	def setupLogging(self):
 		logging.basicConfig(level=self.loglevel)
 		root_log_handler = logging.getLogger('')
 		daemon_log_handler = logging.handlers.RotatingFileHandler(self.logfile,
-																maxBytes=1024*1024,
-																backupCount=1
+															maxBytes=1024*1024,
+															backupCount=1
 																)
 		root_log_handler.addHandler(daemon_log_handler)
 
@@ -69,6 +71,7 @@ class Daemon(object):
 		"""Creates a Daemon and starts the process. Do not override this method
 		"""
 		self.createDaemon()
+		self.setupLogging()
 		self.run()
 
 	def run(self):
@@ -142,10 +145,10 @@ class Daemon(object):
 				 # Since the current working directory may be a mounted filesystem, we
 				 # avoid the issue of not being able to unmount the filesystem at
 				 # shutdown time by changing it to the root directory.
-				 os.chdir(WORKDIR)
+				 os.chdir(self.work_dir)
 				 # We probably don't want the file mode creation mask inherited from
 				 # the parent, so we give the child complete control over permissions.
-				 os.umask(UMASK)
+				 os.umask(self.umask)
 			else:
 				 # exit() or _exit()?	See below.
 				 os._exit(0)		# Exit parent (the first child) of the second child.
@@ -213,5 +216,16 @@ class Daemon(object):
 		return(0)
 
 
+def testDaemon():
+	class TestDaemon(Daemon):
+		def run(self):
+			logging.debug('Writing process id %d to file' %os.getpid())
+			with open('daemon.txt', 'w') as f:
+				f.write('pid: %d\n' %os.getpid())
+
+	d = TestDaemon(loglevel=logging.DEBUG, 
+				work_dir=os.path.abspath(os.path.dirname(__file__)))
+	d.start()
+
 if __name__ == "__main__":
-	pass
+	testDaemon()
