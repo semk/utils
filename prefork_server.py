@@ -203,6 +203,6 @@ class Worker(Process, AsyncSocketHandler):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    server = Server(('localhost', 454545))
+    server = Server(('localhost', 4545))
     server.serve_forever()
     
