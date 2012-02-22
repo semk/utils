@@ -12,7 +12,7 @@ import riak
 _JS_MAP_FUNCTION = """
 function(v) {
 var data = JSON.parse(v.values[0].data);
-%s {
+if(%s) {
 return [[v.key, data]];
 }
 return [];
@@ -35,11 +35,11 @@ class RiakMultiIndexQuery(object):
     def __init__(self, address, port, bucket):
         self._address = address
         self._port = port
+        self._bucket = bucket
         self.reset()
 
     def reset(self):
-        self._client = riak.RiakClient(address, port)
-        self._bucket = bucket
+        self._client = riak.RiakClient(self._address, self._port)
         self._mr_query = riak.RiakMapReduce(self._client)
         self._mr_inputs = set()
         self._filters = []
@@ -66,16 +66,19 @@ class RiakMultiIndexQuery(object):
     def _filter_to_index_query(self, field, op, value):
         if isinstance(value, basestring):
             index_type = 'bin'
+            max = min = ''
         else:
             index_type = 'int'
+            max = 99999999999999999
+            min = -max
         field = '%s_%s' % (field, index_type)
 
         if op == '==':
             return self._client.index(self._bucket, field, value)
         elif op == '>' or op == '>=':
-            return self._client.index(self._bucket, field, value, '')
+            return self._client.index(self._bucket, field, value, max)
         elif op == '<' or op == '<=':
-            return self._client.index(self._bucket, field, '', value)
+            return self._client.index(self._bucket, field, min, value)
         else:
             raise InvalidFilterOperation(op)
 
@@ -85,15 +88,17 @@ class RiakMultiIndexQuery(object):
             for res in self._filter_to_index_query(field, op, value).run():
                 mr_inputs.add(res.get_key())
 
-        for input in mr_inputs:
-            self._mr_query.add(input)
+        if not mr_inputs:
+            self._mr_query = self._client.add(self._bucket)
+        for key in mr_inputs:
+            self._mr_query.add(self._bucket, key)
 
         if not self._filters:
             filter_condition = 'true'
         else:
             conditions = []
             for filter in self._filters:
-                conditions.append(' '.join(filter)) 
+                conditions.append('data.%s %s %r' % filter) 
             filter_condition = ' && '.join(conditions).strip()
 
         map_function = _JS_MAP_FUNCTION % filter_condition
@@ -109,8 +114,8 @@ class RiakMultiIndexQuery(object):
             self._mr_query.reduce(reduce_func)
 
         if self._limit:
-            start = offset
-            end = offset + limit
+            start = self._offset
+            end = self._offset + self._limit
             self._mr_query.reduce('Riak.reduceSlice', {'arg': [start, end]})
 
         for result in self._mr_query.run(timeout):
