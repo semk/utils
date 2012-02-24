@@ -32,16 +32,14 @@ class RiakMultiIndexQuery(object):
     """This class implements a Muti-Query interface for
     Riak Indexes which makes use of Index queries and MapReduce.
     """
-    def __init__(self, address, port, bucket):
-        self._address = address
-        self._port = port
+    def __init__(self, client, bucket):
+        self._client = client
         self._bucket = bucket
         self.reset()
 
     def reset(self):
         """Reset the RiakMultiIndexQuery object for further use.
         """
-        self._client = riak.RiakClient(self._address, self._port)
         self._mr_query = riak.RiakMapReduce(self._client)
         self._mr_inputs = set()
         self._filters = []
@@ -158,7 +156,7 @@ def test_multi_index_query():
         add_index('name_bin', 'Vishnu').\
         add_index('age_int', 31).store()
 
-    query = RiakMultiIndexQuery('localhost', 8091, 'test_multi_index')
+    query = RiakMultiIndexQuery(client, 'test_multi_index')
     for res in query.filter('name', '==', 'Sreejith').run():
         print res
     print 'Last executed query: %r' % query
