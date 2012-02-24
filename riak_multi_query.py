@@ -147,10 +147,10 @@ def test_multi_index_query():
     client = riak.RiakClient('localhost', 8091)
     bucket = client.bucket('test_multi_index')
 
-    bucket.new('sree', {'name': 'Sreejith', 'age': '25'}).\
+    bucket.new('sree', {'name': 'Sreejith', 'age': 25}).\
         add_index('name_bin', 'Sreejith').\
         add_index('age_int', 25).store()
-    bucket.new('vishnu', {'name': 'Vishnu', 'age': '31'}).\
+    bucket.new('vishnu', {'name': 'Vishnu', 'age': 31}).\
         add_index('name_bin', 'Vishnu').\
         add_index('age_int', 31).store()
 
