@@ -23,9 +23,7 @@ function(v) {
 class InvalidFilterOperation(Exception):
     def __init__(self, op):
         self._op = op
-
-    def __repr__(self):
-        print 'Invalid Operator %s' % self._op
+        Exception.__init__(self, 'Invalid Operator %r' % self._op)
 
 
 class RiakMultiIndexQuery(object):
