@@ -12,10 +12,7 @@ import riak
 _JS_MAP_FUNCTION = """
 function(v) {
     var data = JSON.parse(v.values[0].data);
-    if(%s) {
-        return [[v.key, data]];
-    }
-    return [];
+    return [[v.key, data]];
 }
 """
 
@@ -93,29 +90,25 @@ class RiakMultiIndexQuery(object):
 
     def run(self, timeout=9000):
         """Run this Query. This will first query the bucket using indexes and
-        get the keys. Later this keys are passed to MapReduce phase to apply 
-        multiple filters if any.
+        get the union of these keys. Later this keys are passed to MapReduce 
+        phase to fetch and sort the data.
         """
         mr_inputs = set()
         for (field, op, value) in self._filters:
+            results = set()
             for res in self._filter_to_index_query(field, op, value).run():
-                mr_inputs.add(res.get_key())
+                results.add(res.get_key())
+            if not mr_inputs:
+                mr_inputs.update(results)
+            else:
+                mr_inputs.intersection_update(results)
 
         if not mr_inputs:
             self._mr_query = self._client.add(self._bucket)
         for key in mr_inputs:
             self._mr_query.add(self._bucket, key)
 
-        if not self._filters:
-            filter_condition = 'true'
-        else:
-            conditions = []
-            for filter in self._filters:
-                conditions.append('data.%s %s %r' % filter) 
-            filter_condition = ' && '.join(conditions).strip()
-
-        map_function = _JS_MAP_FUNCTION % filter_condition
-        self._mr_query.map(map_function)
+        self._mr_query.map(_JS_MAP_FUNCTION)
 
         if self._order:
             if self._order[1] == 'DESC':
