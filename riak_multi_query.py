@@ -90,18 +90,20 @@ class RiakMultiIndexQuery(object):
 
     def run(self, timeout=9000):
         """Run this Query. This will first query the bucket using indexes and
-        get the union of these keys. Later this keys are passed to MapReduce 
+        get the intersection of these keys. Later this keys are passed to MapReduce 
         phase to fetch and sort the data.
         """
-        mr_inputs = set()
+        index_key_sets = []
         for (field, op, value) in self._filters:
             results = set()
             for res in self._filter_to_index_query(field, op, value).run():
                 results.add(res.get_key())
-            if not mr_inputs:
-                mr_inputs.update(results)
-            else:
-                mr_inputs.intersection_update(results)
+            index_key_sets.append(results)
+
+        if index_key_sets:
+            mr_inputs = reduce(lambda x, y: x.intersection(y), index_key_sets)
+        else:
+            mr_inputs = set()
 
         if not mr_inputs:
             self._mr_query = self._client.add(self._bucket)
