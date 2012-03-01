@@ -6,7 +6,10 @@
 # @author: Sreejith K
 # Created On 22nd Feb 2012
 
+
 import riak
+import threading
+import Queue
 
 
 _JS_MAP_FUNCTION = """
@@ -67,7 +70,7 @@ class RiakMultiIndexQuery(object):
         self._order = (sort_key, order)
         return self
 
-    def _filter_to_index_query(self, field, op, value):
+    def _filter_to_index_query(self, field, op, value, queue):
         """Convert a filter query to Riak index query.
         """
         if isinstance(value, basestring):
@@ -77,16 +80,20 @@ class RiakMultiIndexQuery(object):
             index_type = 'int'
             max = 99999999999999999
             min = -max
+
         field = '%s_%s' % (field, index_type)
+        results = set()
 
         if op == '==':
-            return self._client.index(self._bucket, field, value)
+            [results.add(res.get_key()) for res in self._client.index(self._bucket, field, value).run()]
         elif op == '>' or op == '>=':
-            return self._client.index(self._bucket, field, value, max)
+            [results.add(res.get_key()) for res in self._client.index(self._bucket, field, value, max).run()]
         elif op == '<' or op == '<=':
-            return self._client.index(self._bucket, field, min, value)
+            [results.add(res.get_key()) for res in self._client.index(self._bucket, field, min, value).run()]
         else:
             raise InvalidFilterOperation(op)
+        # push the results to the queue
+        queue.put(results)
 
     def run(self, timeout=9000):
         """Run this Query. This will first query the bucket using indexes and
@@ -94,12 +101,23 @@ class RiakMultiIndexQuery(object):
         phase to fetch and sort the data.
         """
         index_key_sets = []
+        index_query_threads = []
+        queue = Queue.Queue()
         for (field, op, value) in self._filters:
-            results = set()
-            for res in self._filter_to_index_query(field, op, value).run():
-                results.add(res.get_key())
-            index_key_sets.append(results)
+            # spin off threads to do index queries
+            thd = threading.Thread(target=self._filter_to_index_query, args=(field, op, value, queue))
+            index_query_threads.append(thd)
+            thd.start()
 
+        # wait for the threads to finish the job
+        [thd.join() for thd in index_query_threads]
+
+        # get the results back from the queue
+        while not queue.empty():
+            key_set = queue.get()
+            index_key_sets.append(key_set)
+
+        # find the intersection of the key sets.
         if index_key_sets:
             mr_inputs = reduce(lambda x, y: x.intersection(y), index_key_sets)
         else:
