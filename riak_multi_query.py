@@ -19,6 +19,29 @@ function(v) {
 }
 """
 
+_JS_REDUCE_ORDER_FUNC = """
+function(values, arg) {
+    var field = arg.by;
+    var reverse = arg.order == 'desc';
+    values.sort(function(a, b) {
+        a = a[1]; b = b[1];
+        if (reverse) {
+            var _ref = [b, a];
+            a = _ref[0];
+            b = _ref[1];
+        }
+        if (a[field] < b[field]) {
+            return -1;
+        } else if (a[field] == b[field]) {
+            return 0;
+        } else if (a[field] > b[field]) {
+            return 1;
+        }
+    });
+    return values;
+}
+"""
+
 
 class InvalidFilterOperation(Exception):
     def __init__(self, op):
@@ -85,11 +108,14 @@ class RiakMultiIndexQuery(object):
         results = set()
 
         if op == '==':
-            [results.add(res.get_key()) for res in self._client.index(self._bucket, field, value).run()]
+            [results.add(res.get_key()) \
+                 for res in self._client.index(self._bucket, field, value).run()]
         elif op == '>' or op == '>=':
-            [results.add(res.get_key()) for res in self._client.index(self._bucket, field, value, max).run()]
+            [results.add(res.get_key()) \
+                 for res in self._client.index(self._bucket, field, value, max).run()]
         elif op == '<' or op == '<=':
-            [results.add(res.get_key()) for res in self._client.index(self._bucket, field, min, value).run()]
+            [results.add(res.get_key()) \
+                 for res in self._client.index(self._bucket, field, min, value).run()]
         else:
             raise InvalidFilterOperation(op)
         # push the results to the queue
@@ -105,7 +131,8 @@ class RiakMultiIndexQuery(object):
         queue = Queue.Queue()
         for (field, op, value) in self._filters:
             # spin off threads to do index queries
-            thd = threading.Thread(target=self._filter_to_index_query, args=(field, op, value, queue))
+            thd = threading.Thread(target=self._filter_to_index_query, 
+                                   args=(field, op, value, queue))
             index_query_threads.append(thd)
             thd.start()
 
@@ -131,13 +158,11 @@ class RiakMultiIndexQuery(object):
         self._mr_query.map(_JS_MAP_FUNCTION)
 
         if self._order:
-            if self._order[1] == 'DESC':
-                reduce_func = 'function(a, b) { return b.%s - a.%s }'\
-                    % (self._order[0], self._order[0])
-            else:
-                reduce_func = 'function(a, b) { return a.%s - b.%s }' \
-                    % (self._order[0], self._order[0])
-            self._mr_query.reduce(reduce_func)
+            self._mr_query.reduce(_JS_REDUCE_ORDER_FUNC, 
+                                  {'arg': {'by': self._order[0], 
+                                           'order': self._order[1].lower()
+                                           }
+                                   })
 
         if self._limit:
             start = self._offset
@@ -178,7 +203,7 @@ def test_multi_index_query():
     print 'Last executed query: %r' % query
 
     query.reset()
-    for res in query.filter('age', '<', 50).order('age', 'ASC').run():
+    for res in query.filter('age', '<', 50).order('age', 'DESC').run():
         print res
     print 'Last executed query: %r' % query
 
@@ -188,7 +213,7 @@ def test_multi_index_query():
     print 'Last executed query: %r' % query
 
     query.reset()
-    for res in query.order('age', 'ASC').offset(1).limit(1).run():
+    for res in query.order('age', 'DESC').offset(1).limit(1).run():
         print res
     print 'Last executed query: %r' % query
 
