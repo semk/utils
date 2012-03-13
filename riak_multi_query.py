@@ -7,19 +7,23 @@
 # Created On 22nd Feb 2012
 
 
+import sys
 import riak
 import threading
 import Queue
 
 
-_JS_MAP_FUNCTION = """
+MAX_STRING_LENGTH = 500
+FLOAT_PRECISION_LEVEL = 1000
+
+JS_MAP_FUNCTION = """
 function(v) {
     var data = JSON.parse(v.values[0].data);
     return [[v.key, data]];
 }
 """
 
-_JS_REDUCE_ORDER_FUNC = """
+JS_REDUCE_ORDER_FUNC = """
 function(values, arg) {
     var field = arg.by;
     var reverse = arg.order == 'desc';
@@ -98,11 +102,22 @@ class RiakMultiIndexQuery(object):
         """
         if isinstance(value, basestring):
             index_type = 'bin'
-            max = min = ''
+            min = chr(0) * MAX_STRING_LENGTH
+            max = chr(127) * MAX_STRING_LENGTH
+            if op == '>':
+                value = value + ((MAX_STRING_LENGTH - len(value)) * chr(0))
+            elif op == '<':
+                value = value[:-1] + chr(ord(value[-1]) - 1)
         else:
+            if isinstance(value, float):
+                value = int(value * FLOAT_PRECISION_LEVEL)
             index_type = 'int'
-            max = 99999999999999999
+            max = int(sys.float_info.max)
             min = -max
+            if op == '>':
+                value += 1
+            elif op == '<':
+                value -= 1
 
         field = '%s_%s' % (field, index_type)
         results = set()
@@ -150,15 +165,18 @@ class RiakMultiIndexQuery(object):
         else:
             mr_inputs = set()
 
+        if self._filters and not mr_inputs:
+            yield []
+
         if not mr_inputs:
             self._mr_query = self._client.add(self._bucket)
         for key in mr_inputs:
             self._mr_query.add(self._bucket, key)
 
-        self._mr_query.map(_JS_MAP_FUNCTION)
+        self._mr_query.map(JS_MAP_FUNCTION)
 
         if self._order:
-            self._mr_query.reduce(_JS_REDUCE_ORDER_FUNC, 
+            self._mr_query.reduce(JS_REDUCE_ORDER_FUNC, 
                                   {'arg': {'by': self._order[0], 
                                            'order': self._order[1].lower()
                                            }
@@ -167,6 +185,7 @@ class RiakMultiIndexQuery(object):
         if self._limit:
             start = self._offset
             end = self._offset + self._limit
+            if (end > len(mr_inputs)) and self._filters: end = 0;
             self._mr_query.reduce('Riak.reduceSlice', {'arg': [start, end]})
 
         for result in self._mr_query.run(timeout):
