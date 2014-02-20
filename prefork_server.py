@@ -34,8 +34,8 @@ def setup_logging(path, level):
     root_logger.addHandler(log_handler)
 
 
-class AsyncSocketHandler(object):
-    """ Abstract class for Asynchronus socket handling
+class SocketHandler(object):
+    """ Class for handling incoming socket connections. Used by workers.
     """
     def __init__(self, conn_queue):
         self.conn_queue = conn_queue
@@ -78,8 +78,8 @@ class AsyncSocketHandler(object):
 
 
 class Server:
-    """ Socket server which spawns multiple processes that accepts connections from the same
-    port. Uses Apache style preforking.
+    """ Socket server which spawns multiple processes that handles new connections accepted
+    by the server. Uses Apache style preforking.
     """
     def __init__(self, addr, procs=5, logdir=os.path.dirname(__file__), loglevel=logging.DEBUG):
         """ Initialize the server.
@@ -150,8 +150,8 @@ class Server:
                 proc.terminate()
 
 
-class Worker(Process, AsyncSocketHandler):
-    """ A worker process which listens on the same socket as its parent.
+class Worker(Process, SocketHandler):
+    """ A worker process which handles the client request.
     """
     def __init__(self, conn_queue, logdir, loglevel, group=None, target=None, name=None, args=(), kwargs={}):
         """
@@ -163,10 +163,10 @@ class Worker(Process, AsyncSocketHandler):
         self.loglevel = loglevel
         self.log = logging.getLogger(name or self.__class__.__name__)
         Process.__init__(self, group, target, name, args, kwargs)
-        AsyncSocketHandler.__init__(self, conn_queue)
+        SocketHandler.__init__(self, conn_queue)
 
     def run(self):
-        """ Listen on the socket given by the server process.
+        """ Listen on the new socket given by the server process.
         NOTE: This will be a seperate process.
         """
         # setup logging for workers
