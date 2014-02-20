@@ -1,7 +1,6 @@
 #! /usr/bin/env python
 #
-# preforking server using epoll
-# reference: http://scotdoyle.com/python-epoll-howto.html
+# A simple python preforking server
 #
 # @author: Sreejith K
 
@@ -13,7 +12,9 @@ import logging
 import logging.handlers
 import signal
 import select
-from multiprocessing import Process
+from multiprocessing import Process, Queue
+from multiprocessing.reduction import reduce_handle, rebuild_handle
+from curses.ascii import ctrl
 
 
 log = logging.getLogger(__name__)
@@ -36,81 +37,49 @@ def setup_logging(path, level):
 class AsyncSocketHandler(object):
     """ Abstract class for Asynchronus socket handling
     """
-    def __init__(self, sock):
-        self.sock = sock
-        self.request_buffer = {}
-        self.response_buffer = {}
-        self.__running = False
+    def __init__(self, conn_queue):
+        self.conn_queue = conn_queue
+        self.request_handler = None   
 
-    def break_connection(self):
-        """ Accepts no more socket connections.
-        """
-        self.__running = False
-        raise KeyboardInterrupt
+    def start_conn_handling(self):
+        log.debug('Waiting for connection....')
+        serialized_socket = self.conn_queue.get()
+        fd = rebuild_handle(serialized_socket)
+        connection = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
 
-    def start_epoll(self):
-        epoll = select.epoll()
-        epoll.register(self.sock.fileno(), select.EPOLLIN)
-        connections = {}; requests = {}; responses = {}
-        self.__running = True
-        while self.__running:
-            try:
-                events = epoll.poll(1)
-                for fileno, event in events:
-                    if fileno == self.sock.fileno():
-                        log.info('Main: Accepting connections')
-                        connection, address = self.sock.accept()
-                        connection.setblocking(0)
-                        epoll.register(connection.fileno(), select.EPOLLIN)
-                        connections[connection.fileno()] = connection
-                    elif event & select.EPOLLIN:
-                        end_packet = self.handle_request(connections[fileno])
-                        if end_packet:
-                            epoll.modify(fileno, select.EPOLLOUT)
-                    elif event & select.EPOLLOUT:
-                        sent = self.handle_response(connections[fileno])
-                        if sent:
-                            epoll.modify(fileno, 0)
-                            connections[fileno].shutdown(socket.SHUT_RDWR)
-                    elif event & select.EPOLLHUP:
-                        epoll.unregister(fileno)
-                        connections[fileno].close()
-                        del connections[fileno]
-            except KeyboardInterrupt:
-                log.warning('Main: Exiting gracefully')
-                break
-            #except Exception, ex:
-            #    log.error('Error handling this request: %s' %ex)
-        epoll.unregister(self.sock.fileno())
-        epoll.close()
-        self.sock.close()
-        log.info('Main Process stopped gracefully')
-
-    def handle_request(self, sock):
-        """ Handle incoming packets. Return 'True' on retrieving complete packet
-        """
-        self.request_buffer[sock.fileno()] += sock.recv(8192)
-        try:
-            request = None#decode_request(self.request_buffer[sock.fileno()])
-        except:
-            return False
+        log.info('Handling connection: %r' % connection)
+        if self.request_handler:
+            self.request_handler(connection)
         else:
-            self.response_buffer[sock.fileno()] = None#do_server_side_func(request)
-            return True
+            self.echo_handler(connection)
 
-    def handle_response(self, sock):
-        """ Handle outgoing packets. Return 'True' once the response is sent
+        log.info('Handler: Finished successfully.')
+
+    def register_handler(self, handler):
+        """ Register a callback for handing incoming packets.
         """
-        sock.send(self.response_buffer[sock.fileno()][:8192])
-        self.response_buffer[sock.fileno()] = self.response_buffer[sock.fileno()][8192:]
-        if len(self.response_buffer[self.fileno()]) == 0:
-            return True
-        return False
+        if callable(handler):
+            self.request_handler = handler
+        else:
+            raise Exception('%r should be calable' % handler)
+
+    def echo_handler(self, connection):
+        """ Fallback handler incase of no handlers. Echos the requests.
+        """
+        while True:
+            request = connection.recv(1024)
+            if 'end' in request:
+                break
+            elif request:
+                connection.send(request)
+
+        connection.send(ctrl(']'))
+        connection.close()
 
 
-class Server(AsyncSocketHandler):
-    """ RPC server which spawns multiple processes that listens on the same
-    port. Uses Apache style preforking and uses epoll asynchronous sockets.
+class Server:
+    """ Socket server which spawns multiple processes that accepts connections from the same
+    port. Uses Apache style preforking.
     """
     def __init__(self, addr, procs=5, logdir=os.path.dirname(__file__), loglevel=logging.DEBUG):
         """ Initialize the server.
@@ -123,19 +92,14 @@ class Server(AsyncSocketHandler):
         self.procs = procs
         self.logdir = logdir
         self.loglevel = loglevel
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(addr)
-        log.debug('%s listening on %s' % (type(self).__name__, addr))
         self.proc_pool = {}
-        self.__running = False
-        super(Server, self).__init__(sock)
+        self.conn_queue = Queue(self.procs)
 
     def spawn_worker_processes(self):
         """ Spawn all the worker processes
         """
         for i in range(self.procs):
-            proc = Worker(self.sock, self.logdir, self.loglevel, name='Worker-%d' %i)
+            proc = Worker(self.conn_queue, self.logdir, self.loglevel, name='Worker-%d' %i)
             self.proc_pool[proc.name] = proc
             proc.start()
             log.debug('Process %s started' %proc.name)
@@ -147,19 +111,35 @@ class Server(AsyncSocketHandler):
         def stop_gracefully(signum, frame):
             self.stop_server()
         
-        signal.signal(signal.SIGTERM, stop_gracefully)
+        signal.signal(signal.SIGINT, stop_gracefully)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(self.addr)
+        log.debug('%s listening on %s' % (type(self).__name__, self.addr))
 
         # start listening on this port
-        self.sock.listen(5)
-        self.sock.setblocking(0)
+        sock.listen(5)
+        # sock.setblocking(0)
+
         # spawn worker processes
         self.spawn_worker_processes()
-        # start epoll
-        self.start_epoll()
 
-    def callback(self, object):
-        log.info('Callback: %s' %object)
-    
+        try:
+            while True:
+                # start accepting connections
+                log.debug('Main: Waiting for incoming connections')
+                connection, address = sock.accept()
+                # connection.setblocking(0)
+
+                serialized_socket = reduce_handle(connection.fileno())
+                self.conn_queue.put(serialized_socket)
+        except socket.error:
+            log.warning('Interrupt: Stopping main process')
+            self.stop_server()
+        finally:
+            sock.close()
+
     def stop_server(self):
         """ Stop the server. Stop all the spawned processes.
         """
@@ -168,38 +148,34 @@ class Server(AsyncSocketHandler):
             if proc.is_alive():
                 log.info('Stopping process %r' %proc.name)
                 proc.terminate()
-        self.break_connection()
 
 
 class Worker(Process, AsyncSocketHandler):
     """ A worker process which listens on the same socket as its parent.
     """
-    def __init__(self, sock, logdir, loglevel, group=None, target=None, name=None, args=(), kwargs={}):
+    def __init__(self, conn_queue, logdir, loglevel, group=None, target=None, name=None, args=(), kwargs={}):
         """
         Args:
             sock: shared server socket
         """
+        self.conn_queue = conn_queue
         self.logdir = logdir
         self.loglevel = loglevel
         self.log = logging.getLogger(name or self.__class__.__name__)
         Process.__init__(self, group, target, name, args, kwargs)
-        AsyncSocketHandler.__init__(self, sock)
+        AsyncSocketHandler.__init__(self, conn_queue)
 
     def run(self):
         """ Listen on the socket given by the server process.
         NOTE: This will be a seperate process.
         """
-        # register SIGTERM for graceful exit.
-        def stop_gracefully(signum, frame):
-            self.break_connection()
-        
-        signal.signal(signal.SIGTERM, stop_gracefully)
-
         # setup logging for workers
         logpath = os.path.join(self.logdir, '%s.log' %self.name)
         setup_logging(logpath, self.loglevel)
-        # start epoll
-        self.start_epoll()
+        # start connection handling
+        while True:
+            self.start_conn_handling()
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
